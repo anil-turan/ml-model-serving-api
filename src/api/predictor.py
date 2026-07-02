@@ -5,12 +5,11 @@ Loads best_model_bundle.pkl from the credit-risk-ml-pipeline project.
 The bundle contains the full inference pipeline:
   selector → ColumnTransformer (StandardScaler + OHE) → LightGBM
 """
+import datetime
 import os
 import pickle
 import uuid
-import datetime
 from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import pandas as pd
@@ -49,7 +48,7 @@ def load_bundle() -> dict:
     return _bundle
 
 
-def _grade(prob: float) -> Tuple[str, str]:
+def _grade(prob: float) -> tuple[str, str]:
     for threshold, grade, decision in _GRADE_THRESHOLDS:
         if prob < threshold:
             return grade, decision

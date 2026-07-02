@@ -1,6 +1,5 @@
 """Integration tests for the FastAPI endpoints."""
-import pytest
-from tests.conftest import SAMPLE_APPLICATION, LOW_RISK_APPLICATION
+from tests.conftest import SAMPLE_APPLICATION
 
 
 def test_health_ok(client):

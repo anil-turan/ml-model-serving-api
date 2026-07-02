@@ -7,12 +7,10 @@ Metrics exported at /metrics:
   - prediction_requests_total    (counter, labelled by risk_grade and decision)
   - high_risk_rate_ratio         (gauge — rolling % of E-grade predictions)
 """
-import time
 import collections
 import threading
-from typing import Deque
 
-from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 REQUEST_LATENCY = Histogram(
     "prediction_latency_seconds",
@@ -39,7 +37,7 @@ HIGH_RISK_GAUGE = Gauge(
 
 # Rolling window for lightweight drift detection (no external DB needed)
 _window_lock = threading.Lock()
-_score_window: Deque[float] = collections.deque(maxlen=1000)
+_score_window: collections.deque[float] = collections.deque(maxlen=1000)
 
 
 def record_prediction(prob: float, grade: str, decision: str, latency: float) -> None:

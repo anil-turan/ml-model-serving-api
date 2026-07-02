@@ -1,13 +1,10 @@
 """Shared fixtures for all tests."""
-import pickle
-import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
 from fastapi.testclient import TestClient
-
 
 SAMPLE_APPLICATION = {
     "AMT_INCOME_TOTAL": 90000,
@@ -78,12 +75,11 @@ def client(mock_bundle, monkeypatch):
     monkeypatch keeps the patch alive for the full duration of the test,
     unlike a context manager which exits after the fixture returns.
     """
-    import src.api.predictor as pred_module
     import src.api.main as main_module
+    import src.api.predictor as pred_module
 
     monkeypatch.setattr(pred_module, "_bundle", mock_bundle)
     monkeypatch.setattr(pred_module, "_BUNDLE_PATH", Path("/fake/bundle.pkl"))
     monkeypatch.setattr(main_module, "_model_ready", True)
 
-    from fastapi.testclient import TestClient
     return TestClient(main_module.app)

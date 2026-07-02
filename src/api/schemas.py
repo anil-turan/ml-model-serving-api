@@ -1,6 +1,5 @@
+
 from pydantic import BaseModel, Field, model_validator
-from typing import Optional
-import datetime
 
 
 class LoanApplicationRequest(BaseModel):
@@ -61,15 +60,15 @@ class PredictionResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     model_version: str
-    test_roc_auc: Optional[float]
+    test_roc_auc: float | None
     uptime_seconds: float
 
 
 class DriftReport(BaseModel):
-    score_mean: Optional[float]
-    score_std: Optional[float]
-    high_risk_rate: Optional[float]
+    score_mean: float | None
+    score_std: float | None
+    high_risk_rate: float | None
     sample_count: int
     window_hours: int
     alert: bool
-    alert_reason: Optional[str]
+    alert_reason: str | None
