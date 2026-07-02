@@ -1,5 +1,12 @@
 # ML Model Serving API
 
+[![Python](https://img.shields.io/badge/python-3.11-blue)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.111-009688)](https://fastapi.tiangolo.com/)
+[![Docker](https://img.shields.io/badge/Docker-2496ED)](https://www.docker.com/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-E6522C)](https://prometheus.io/)
+[![Grafana](https://img.shields.io/badge/Grafana-F46800)](https://grafana.com/)
+[![tests](https://img.shields.io/badge/coverage-91%25-brightgreen)](tests/)
+
 Production-ready FastAPI service for credit default risk scoring. Deploys the LightGBM + Optuna model from [credit-risk-ml-pipeline](../credit-risk-ml-pipeline) behind a REST API with full observability.
 
 **Model:** LightGBM + Optuna · ROC-AUC **0.754** · KS **37.9**  
