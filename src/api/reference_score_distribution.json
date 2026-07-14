@@ -1,0 +1,29 @@
+{
+  "source": "credit-risk-ml-pipeline train_test_split(test_size=0.20, random_state=42, stratify=TARGET), scored through best_model_bundle.pkl",
+  "bin_edges": [
+    0.0,
+    0.05,
+    0.1,
+    0.2,
+    0.35,
+    0.5,
+    0.65,
+    0.8,
+    1.0
+  ],
+  "bin_proportions": [
+    0.0006503747784660911,
+    0.011723005381851292,
+    0.11493748272441995,
+    0.2803928263661935,
+    0.2532396793652342,
+    0.1952912866039055,
+    0.11700242264604979,
+    0.02676292213387965
+  ],
+  "n_reference": 61503,
+  "reference_mean": 0.4213893198657205,
+  "reference_std": 0.1903555875324269,
+  "true_default_rate": 0.08072776937710356,
+  "note": "reference_mean is far above true_default_rate because the deployed model was trained with scale_pos_weight=11.39 to improve ranking (AUC) on this imbalanced problem \u2014 predict_proba is NOT a calibrated probability. Drift detection below compares against this reference distribution's own shape, not against the true default rate, so this miscalibration doesn't distort the PSI calculation."
+}
