@@ -5,7 +5,7 @@
 [![Docker](https://img.shields.io/badge/Docker-2496ED)](https://www.docker.com/)
 [![Prometheus](https://img.shields.io/badge/Prometheus-E6522C)](https://prometheus.io/)
 [![Grafana](https://img.shields.io/badge/Grafana-F46800)](https://grafana.com/)
-[![tests](https://img.shields.io/badge/coverage-91%25-brightgreen)](tests/)
+[![tests](https://img.shields.io/badge/coverage-92%25-brightgreen)](tests/)
 
 Production-ready FastAPI service for credit default risk scoring. Deploys the LightGBM + Optuna model from [credit-risk-ml-pipeline](../credit-risk-ml-pipeline) behind a REST API with full observability.
 
@@ -51,11 +51,16 @@ ml-model-serving-api/
 │   ├── main.py          # FastAPI app + lifespan (model loading)
 │   ├── schemas.py       # Pydantic request/response models
 │   ├── predictor.py     # Model loading + inference pipeline
-│   └── monitoring.py    # Prometheus metrics + drift detection
+│   ├── monitoring.py    # Prometheus metrics + drift reporting
+│   ├── drift.py         # From-scratch PSI (Siddiqi 2006) vs reference distribution
+│   └── reference_score_distribution.json  # Binned reference scores (see scripts/)
+├── scripts/
+│   └── build_reference_distribution.py    # Regenerates the reference distribution above
 ├── tests/
 │   ├── conftest.py      # Shared fixtures (mock bundle, TestClient)
 │   ├── test_api.py      # Endpoint integration tests
-│   ├── test_monitoring.py # Drift detection unit tests
+│   ├── test_monitoring.py # Drift reporting unit tests
+│   ├── test_drift.py    # PSI module unit tests
 │   └── test_schemas.py  # Pydantic validation tests
 ├── docker/
 │   ├── Dockerfile
@@ -157,19 +162,23 @@ docker-compose up --build
 
 ### `GET /drift`
 
-Rolling score distribution over the last 1000 predictions. Raises an alert if mean score exceeds 18% (2 SD above the 8.1% population default rate).
+Rolling score distribution over the last 1000 predictions, with a **PSI-based** drift alert (Population Stability Index vs. a reference distribution reproduced from the model's held-out test set — see [Monitoring](#monitoring) below).
 
 ```json
 {
-  "score_mean": 0.1124,
-  "score_std": 0.0873,
-  "high_risk_rate": 0.082,
+  "score_mean": 0.4187,
+  "score_std": 0.1932,
+  "high_risk_rate": 0.301,
   "sample_count": 247,
   "window_hours": 1,
+  "psi": 0.0421,
+  "psi_status": "stable",
   "alert": false,
   "alert_reason": null
 }
 ```
+
+`psi_status` is `stable` (< 0.10), `moderate` (0.10–0.25), or `significant` (≥ 0.25 — `alert: true`). `psi`/`psi_status` are `null` until the rolling window has at least 30 samples.
 
 ### `GET /metrics`
 
@@ -183,6 +192,7 @@ Prometheus text format. Scraped at `/metrics`.
 | `prediction_score` | Histogram | Default probability distribution |
 | `prediction_requests_total` | Counter | Request count by risk_grade + decision |
 | `high_risk_rate_ratio` | Gauge | Rolling % of Decline-grade (E) predictions |
+| `prediction_score_psi` | Gauge | PSI of the rolling window vs. the reference test-set score distribution |
 
 ---
 
@@ -192,12 +202,13 @@ Prometheus text format. Scraped at `/metrics`.
 pytest tests/ -v --cov=src --cov-report=term-missing
 ```
 
-**Coverage: 91%** — all endpoints, drift logic, and schema validation tested with a mock bundle (no pkl file needed to run tests).
+**Coverage: 92%** (26 tests) — all endpoints, PSI drift logic, and schema validation tested with a mock bundle (no pkl file needed to run tests).
 
 | Module | Coverage |
 |--------|----------|
 | `schemas.py` | 100% |
 | `monitoring.py` | 100% |
+| `drift.py` | 100% |
 | `predictor.py` | 90% |
 | `main.py` | 78% |
 
@@ -235,10 +246,24 @@ push to main / PR
 - Predictions by risk grade (pie chart)
 - High-risk rate gauge with threshold alert at 30%
 
-**Drift detection logic:**
+**Drift detection logic (PSI-based, deepened 2026-07-14):**
 - Maintains a rolling window of the last 1,000 predictions (in-memory, thread-safe)
-- Alerts when mean default probability > 18% (2 SD above the 8.1% training distribution)
-- Exposed via `/drift` for polling or external alertmanager integration
+- Compares the window against a **reference score distribution** reproduced from the
+  credit-risk-ml-pipeline test split (`scripts/build_reference_distribution.py` — same
+  `train_test_split(test_size=0.20, random_state=42, stratify=TARGET)` used for that
+  project's fairness audit, scored through the deployed bundle; AUC reproduces to 0.7540,
+  matching the bundle's stored 0.754)
+- PSI (Siddiqi 2006, from scratch — same implementation/alarm bands as the
+  customer-churn-prediction and ato-detection-lstm projects): **< 0.10 stable, 0.10–0.25
+  moderate, ≥ 0.25 significant** → `alert: true`
+- Exposed via `/drift` (JSON) and `/metrics` (`prediction_score_psi` gauge, for
+  Prometheus/Grafana alerting) — see [`src/api/drift.py`](src/api/drift.py)
+
+**Why PSI, not a mean-score threshold:** the original version of this drift check alerted
+when the rolling mean exceeded a fixed 0.18. Reproducing the reference distribution
+surfaced why that was unreliable — see **Design Decisions** below.
+
+Tests: `pytest tests/test_drift.py tests/test_monitoring.py` — 11 tests, all passing.
 
 ---
 
@@ -249,6 +274,20 @@ push to main / PR
 **Why no MLflow?** MLflow model registry is additive infrastructure. The model bundle pkl is the canonical artefact for this project. An `mlflow ui` integration would add another service with no learning return for this scope.
 
 **Why `monkeypatch` in tests not `unittest.mock.patch` context managers?** Context managers in pytest fixtures exit before the test body runs, leaving the mock inactive. `monkeypatch` from pytest stays active for the full test lifetime.
+
+**Why the model's predicted probability isn't the true default rate:** reproducing the
+deployed bundle's test-set predictions (for the PSI reference distribution, see Monitoring
+above) turned up a real finding — the reference mean predicted probability is **~42%**, far
+above the **~8%** true default rate in the same test set, even though the model's AUC (0.754)
+reproduces exactly. The cause: the bundle's LightGBM was trained with
+`scale_pos_weight=11.39` to improve ranking on this imbalanced problem, which is a legitimate
+technique for AUC but destroys probability calibration — `predict_proba` should be read as a
+**risk-ranking score**, not a literal probability. This is why the risk-grade thresholds (5%,
+10%, 20%, 35%) are themselves uncalibrated cutoffs tuned on the raw score, and why the old
+mean-threshold drift check (alerting above 0.18) was unreliable: 0.18 sits *below* the
+reference mean of 0.42, so it would have fired continuously even with zero drift. PSI-based
+drift detection compares the distribution's *shape* over time instead, which isn't affected
+by this miscalibration.
 
 ---
 
