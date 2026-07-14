@@ -70,5 +70,7 @@ class DriftReport(BaseModel):
     high_risk_rate: float | None
     sample_count: int
     window_hours: int
+    psi: float | None
+    psi_status: str | None
     alert: bool
     alert_reason: str | None

@@ -6,11 +6,21 @@ Metrics exported at /metrics:
   - prediction_score_distribution (histogram — tracks score drift over time)
   - prediction_requests_total    (counter, labelled by risk_grade and decision)
   - high_risk_rate_ratio         (gauge — rolling % of E-grade predictions)
+  - prediction_score_psi         (gauge — PSI of the rolling window vs the
+                                   reference test-set score distribution)
+
+Drift alerting is PSI-based (see drift.py) rather than a fixed mean-score
+threshold — this repo's model uses scale_pos_weight for class imbalance, so
+predict_proba's mean (~0.42) isn't the true default rate (~8%), which made a
+mean-threshold alert unreliable (see drift.py's module docstring).
 """
 import collections
+import statistics
 import threading
 
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+
+from src.api.drift import classify_psi, psi_from_reference
 
 REQUEST_LATENCY = Histogram(
     "prediction_latency_seconds",
@@ -35,6 +45,14 @@ HIGH_RISK_GAUGE = Gauge(
     "Rolling proportion of Decline-grade (E) predictions over last 1000 requests",
 )
 
+PSI_GAUGE = Gauge(
+    "prediction_score_psi",
+    "Population Stability Index of the rolling prediction window vs the reference test-set distribution",
+)
+
+# Minimum window size before PSI is meaningful (histogram bins would be too sparse below this).
+_MIN_PSI_SAMPLE = 30
+
 # Rolling window for lightweight drift detection (no external DB needed)
 _window_lock = threading.Lock()
 _score_window: collections.deque[float] = collections.deque(maxlen=1000)
@@ -47,13 +65,17 @@ def record_prediction(prob: float, grade: str, decision: str, latency: float) ->
 
     with _window_lock:
         _score_window.append(prob)
-        if _score_window:
-            high_risk_rate = sum(1 for s in _score_window if s >= 0.35) / len(_score_window)
-            HIGH_RISK_GAUGE.set(high_risk_rate)
+        window = list(_score_window)
+
+    high_risk_rate = sum(1 for s in window if s >= 0.35) / len(window)
+    HIGH_RISK_GAUGE.set(high_risk_rate)
+
+    if len(window) >= _MIN_PSI_SAMPLE:
+        PSI_GAUGE.set(psi_from_reference(window))
 
 
 def get_drift_report(window_hours: int = 1) -> dict:
-    """Return a lightweight score-distribution snapshot for the rolling window."""
+    """Return a PSI-based drift snapshot for the rolling window vs the reference distribution."""
     with _window_lock:
         scores = list(_score_window)
 
@@ -64,19 +86,23 @@ def get_drift_report(window_hours: int = 1) -> dict:
             "high_risk_rate": None,
             "sample_count": 0,
             "window_hours": window_hours,
+            "psi": None,
+            "psi_status": None,
             "alert": False,
             "alert_reason": None,
         }
 
-    import statistics
     mean = statistics.mean(scores)
     std = statistics.stdev(scores) if len(scores) > 1 else 0.0
     high_risk_rate = sum(1 for s in scores if s >= 0.35) / len(scores)
 
-    # Simple drift alert: mean score > 2 standard deviations above 0.08 (population default rate)
-    EXPECTED_MEAN = 0.08
-    alert = mean > EXPECTED_MEAN + 2 * 0.05  # flag if mean default prob > 18%
-    alert_reason = f"Mean score {mean:.3f} exceeds alert threshold 0.18" if alert else None
+    if len(scores) >= _MIN_PSI_SAMPLE:
+        psi_value = psi_from_reference(scores)
+        psi_status = classify_psi(psi_value)
+        alert = psi_status == "significant"
+        alert_reason = f"PSI {psi_value:.4f} vs reference distribution ({psi_status} shift)" if alert else None
+    else:
+        psi_value, psi_status, alert, alert_reason = None, None, False, None
 
     return {
         "score_mean": round(mean, 4),
@@ -84,6 +110,8 @@ def get_drift_report(window_hours: int = 1) -> dict:
         "high_risk_rate": round(high_risk_rate, 4),
         "sample_count": len(scores),
         "window_hours": window_hours,
+        "psi": round(psi_value, 4) if psi_value is not None else None,
+        "psi_status": psi_status,
         "alert": alert,
         "alert_reason": alert_reason,
     }
